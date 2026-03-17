@@ -2,18 +2,20 @@
 
 import { useEffect, useState } from "react";
 import {
-  Activity,
   AlertCircle,
-  Bot,
+  BookOpen,
   CheckCircle,
+  ChevronDown,
+  ChevronRight,
   Database,
   FileText,
   Globe,
   Key,
   Loader2,
-  Package,
+  MessageSquare,
   RefreshCw,
   Search,
+  Terminal,
   XCircle,
 } from "lucide-react";
 
@@ -24,39 +26,43 @@ interface GatewayInfo {
   lastPing: string | null;
 }
 
-interface EndpointStatus {
-  path: string;
-  status: number | null;
+interface ToolInvokeResult {
   ok: boolean;
+  tool: string;
+  data: unknown;
   error?: string;
+}
+
+interface WorkspaceFile {
+  name: string;
+  content: string;
+  exists: boolean;
+}
+
+interface SessionInfo {
+  sessionKey?: string;
+  agentId?: string;
+  label?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+interface MemorySearchResult {
+  path: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+  snippet: string;
+  source: "memory" | "sessions";
 }
 
 interface DashboardData {
   gateway: GatewayInfo;
-  memoryFiles: Record<string, unknown>[];
-  agents: Record<string, unknown>[];
-  modules: Record<string, unknown>[];
-  keyFiles: string[];
-  endpoints: EndpointStatus[];
-  rawDiscovery?: Record<string, unknown>;
+  workspaceFiles: WorkspaceFile[];
+  sessions: SessionInfo[];
+  memorySearchResults: MemorySearchResult[];
+  toolResults: ToolInvokeResult[];
   error?: string;
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    active: "bg-green-500/20 text-green-400 border-green-500/30",
-    idle: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-    error: "bg-red-500/20 text-red-400 border-red-500/30",
-    loaded: "bg-green-500/20 text-green-400 border-green-500/30",
-    unloaded: "bg-gray-500/20 text-gray-400 border-gray-500/30",
-  };
-  return (
-    <span
-      className={`px-2 py-0.5 rounded-full text-xs border ${colors[status] || colors.idle}`}
-    >
-      {status}
-    </span>
-  );
 }
 
 function Card({
@@ -64,43 +70,76 @@ function Card({
   icon: Icon,
   children,
   count,
+  defaultOpen = true,
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
   count?: number;
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-      <div className="flex items-center justify-between mb-4">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-between w-full text-left"
+      >
         <div className="flex items-center gap-2">
           <Icon className="w-5 h-5 text-blue-400" />
           <h2 className="text-lg font-semibold text-gray-100">{title}</h2>
+          {count !== undefined && (
+            <span className="bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full text-xs">
+              {count}
+            </span>
+          )}
         </div>
-        {count !== undefined && (
-          <span className="bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full text-xs">
-            {count}
-          </span>
+        {open ? (
+          <ChevronDown className="w-4 h-4 text-gray-500" />
+        ) : (
+          <ChevronRight className="w-4 h-4 text-gray-500" />
         )}
-      </div>
-      {children}
+      </button>
+      {open && <div className="mt-4">{children}</div>}
     </div>
   );
 }
 
-function getDisplayValue(obj: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    if (obj[key] !== undefined && obj[key] !== null) return String(obj[key]);
-  }
-  return JSON.stringify(obj);
+function WorkspaceFileCard({ file }: { file: WorkspaceFile }) {
+  const [expanded, setExpanded] = useState(false);
+  const icon = file.exists ? (
+    <CheckCircle className="w-4 h-4 text-green-400" />
+  ) : (
+    <XCircle className="w-4 h-4 text-gray-600" />
+  );
+
+  return (
+    <div className="bg-gray-800/50 rounded-lg">
+      <button
+        onClick={() => file.exists && setExpanded(!expanded)}
+        className={`flex items-center gap-3 w-full text-left p-3 ${file.exists ? "cursor-pointer hover:bg-gray-800/80" : "cursor-default opacity-50"}`}
+      >
+        {icon}
+        <span className="text-sm font-mono text-gray-200">{file.name}</span>
+        {file.exists && (
+          <span className="text-xs text-gray-500 ml-auto">
+            {file.content.split("\n").length} lines
+          </span>
+        )}
+      </button>
+      {expanded && file.exists && (
+        <pre className="px-3 pb-3 text-xs text-gray-400 overflow-auto max-h-64 font-mono whitespace-pre-wrap border-t border-gray-700/50 pt-3 mx-3">
+          {file.content}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 export default function MissionControl() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showEndpoints, setShowEndpoints] = useState(false);
-  const [showRawData, setShowRawData] = useState(false);
 
   async function fetchData() {
     try {
@@ -115,11 +154,10 @@ export default function MissionControl() {
           tokenConfigured: false,
           lastPing: null,
         },
-        memoryFiles: [],
-        agents: [],
-        modules: [],
-        keyFiles: [],
-        endpoints: [],
+        workspaceFiles: [],
+        sessions: [],
+        memorySearchResults: [],
+        toolResults: [],
         error: "Failed to reach the API. Check your deployment.",
       });
     } finally {
@@ -145,8 +183,8 @@ export default function MissionControl() {
     );
   }
 
-  const okEndpoints = data?.endpoints?.filter((e) => e.ok) || [];
-  const failedEndpoints = data?.endpoints?.filter((e) => !e.ok) || [];
+  const existingFiles = data?.workspaceFiles.filter((f) => f.exists) || [];
+  const missingFiles = data?.workspaceFiles.filter((f) => !f.exists) || [];
 
   return (
     <div className="min-h-screen p-6 max-w-7xl mx-auto">
@@ -175,7 +213,7 @@ export default function MissionControl() {
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-6 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
           <div>
-            <p className="text-red-400 font-medium">Configuration Issue</p>
+            <p className="text-red-400 font-medium">Issue Detected</p>
             <p className="text-red-300/80 text-sm mt-1">{data.error}</p>
           </div>
         </div>
@@ -243,230 +281,196 @@ export default function MissionControl() {
         </div>
       </div>
 
-      {/* Endpoint Discovery */}
-      {data?.endpoints && data.endpoints.length > 0 && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
-          <button
-            onClick={() => setShowEndpoints(!showEndpoints)}
-            className="flex items-center gap-2 w-full text-left"
-          >
-            <Search className="w-5 h-5 text-blue-400" />
-            <h2 className="text-lg font-semibold text-gray-100">
-              API Endpoint Discovery
-            </h2>
-            <span className="ml-auto flex items-center gap-2 text-sm">
-              <span className="text-green-400">{okEndpoints.length} OK</span>
-              <span className="text-red-400">
-                {failedEndpoints.length} failed
-              </span>
-              <span className="text-gray-500">
-                {showEndpoints ? "▲" : "▼"}
-              </span>
-            </span>
-          </button>
-          {showEndpoints && (
-            <div className="mt-4 space-y-1 max-h-96 overflow-y-auto">
-              {data.endpoints.map((ep) => (
-                <div
-                  key={ep.path}
-                  className={`flex items-center justify-between px-3 py-2 rounded font-mono text-xs ${
-                    ep.ok
-                      ? "bg-green-500/10 text-green-300"
-                      : "bg-gray-800/50 text-gray-500"
-                  }`}
-                >
-                  <span>{ep.path}</span>
-                  <span>
-                    {ep.ok ? (
-                      <span className="text-green-400">{ep.status}</span>
-                    ) : (
-                      <span className="text-red-400">
-                        {ep.error || ep.status}
-                      </span>
-                    )}
-                  </span>
+      {/* Main Content */}
+      <div className="space-y-6">
+        {/* Workspace Files */}
+        <Card
+          title="Workspace Files"
+          icon={BookOpen}
+          count={existingFiles.length}
+        >
+          <p className="text-xs text-gray-500 mb-3">
+            Agent workspace at <code>~/.openclaw/workspace/</code> — fetched
+            via <code>POST /tools/invoke</code> → <code>memory_get</code>
+          </p>
+          <div className="space-y-2">
+            {existingFiles.map((file) => (
+              <WorkspaceFileCard key={file.name} file={file} />
+            ))}
+            {missingFiles.length > 0 && (
+              <div className="pt-2 border-t border-gray-800">
+                <p className="text-xs text-gray-600 mb-2">
+                  Not found ({missingFiles.length}):
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {missingFiles.map((file) => (
+                    <span
+                      key={file.name}
+                      className="text-xs text-gray-600 font-mono bg-gray-800/30 px-2 py-1 rounded"
+                    >
+                      {file.name}
+                    </span>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Raw Discovery Data */}
-      {data?.rawDiscovery &&
-        Object.keys(data.rawDiscovery).length > 0 && (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
-            <button
-              onClick={() => setShowRawData(!showRawData)}
-              className="flex items-center gap-2 w-full text-left"
-            >
-              <Database className="w-5 h-5 text-purple-400" />
-              <h2 className="text-lg font-semibold text-gray-100">
-                Raw Gateway Response Data
-              </h2>
-              <span className="ml-auto text-gray-500 text-sm">
-                {showRawData ? "▲" : "▼"}
-              </span>
-            </button>
-            {showRawData && (
-              <pre className="mt-4 bg-gray-950 rounded-lg p-4 text-xs text-gray-300 overflow-auto max-h-96 font-mono">
-                {JSON.stringify(data.rawDiscovery, null, 2)}
-              </pre>
+              </div>
             )}
           </div>
-        )}
-
-      {/* Main Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Active Agents */}
-        <Card title="Active Agents" icon={Bot} count={data?.agents.length}>
-          {data?.agents.length === 0 ? (
-            <p className="text-gray-500 text-sm">
-              No agents found. Check endpoint discovery above to verify correct
-              API paths.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {data?.agents.map((agent, i) => (
-                <div
-                  key={String(agent.id || i)}
-                  className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-200">
-                      {getDisplayValue(agent, ["name", "id", "agent_name"])}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {getDisplayValue(agent, [
-                        "module",
-                        "type",
-                        "agent_type",
-                      ])}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {agent.status != null && (
-                      <StatusBadge status={String(agent.status)} />
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </Card>
 
-        {/* Modules */}
-        <Card title="Modules" icon={Package} count={data?.modules.length}>
-          {data?.modules.length === 0 ? (
-            <p className="text-gray-500 text-sm">
-              No modules loaded. Check endpoint discovery above to verify
-              correct API paths.
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Sessions */}
+          <Card
+            title="Active Sessions"
+            icon={MessageSquare}
+            count={data?.sessions.length}
+          >
+            <p className="text-xs text-gray-500 mb-3">
+              Via <code>sessions_list</code>
             </p>
-          ) : (
-            <div className="space-y-3">
-              {data?.modules.map((mod, i) => (
-                <div
-                  key={String(mod.name || i)}
-                  className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-200">
-                      {getDisplayValue(mod, ["name", "module_name"])}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {getDisplayValue(mod, ["version", "ver"])}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {mod.status != null && (
-                      <StatusBadge status={String(mod.status)} />
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-
-        {/* Memory Files */}
-        <Card
-          title="Memory Files"
-          icon={Database}
-          count={data?.memoryFiles.length}
-        >
-          {data?.memoryFiles.length === 0 ? (
-            <p className="text-gray-500 text-sm">
-              No memory files found. Check endpoint discovery above to verify
-              correct API paths.
-            </p>
-          ) : (
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {data?.memoryFiles.map((file, i) => (
-                <div
-                  key={String(file.path || file.name || i)}
-                  className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-4 h-4 text-gray-400 shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm text-gray-200 truncate">
-                        {getDisplayValue(file, [
-                          "name",
-                          "filename",
-                          "file_name",
-                        ])}
+            {data?.sessions.length === 0 ? (
+              <p className="text-gray-500 text-sm">
+                No sessions returned. The agent may not have active sessions, or
+                the tool may require different permissions.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {data?.sessions.map((session, i) => (
+                  <div
+                    key={session.sessionKey || i}
+                    className="bg-gray-800/50 rounded-lg p-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-mono text-gray-200">
+                        {session.label ||
+                          session.sessionKey ||
+                          session.agentId ||
+                          `Session ${i + 1}`}
                       </p>
-                      <p className="text-xs text-gray-500 truncate">
-                        {getDisplayValue(file, ["path", "file_path", "key"])}
-                      </p>
+                      {session.status && (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-xs border ${
+                            session.status === "active"
+                              ? "bg-green-500/20 text-green-400 border-green-500/30"
+                              : "bg-gray-500/20 text-gray-400 border-gray-500/30"
+                          }`}
+                        >
+                          {session.status}
+                        </span>
+                      )}
                     </div>
+                    {session.agentId && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Agent: {session.agentId}
+                      </p>
+                    )}
                   </div>
-                  {file.size !== undefined && (
-                    <span className="text-xs text-gray-500 shrink-0 ml-2">
-                      {(Number(file.size) / 1024).toFixed(1)}KB
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
+                ))}
+              </div>
+            )}
+          </Card>
 
-        {/* Key Files */}
-        <Card
-          title="Key Active Files"
-          icon={Activity}
-          count={data?.keyFiles.length}
-        >
-          {data?.keyFiles.length === 0 ? (
-            <p className="text-gray-500 text-sm">
-              No key files tracked. Check endpoint discovery above to verify
-              correct API paths.
+          {/* Memory Search Results */}
+          <Card
+            title="Memory Search"
+            icon={Search}
+            count={data?.memorySearchResults.length}
+          >
+            <p className="text-xs text-gray-500 mb-3">
+              Via <code>memory_search</code> — recent activity
             </p>
-          ) : (
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {data?.keyFiles.map((file) => (
-                <div
-                  key={file}
-                  className="flex items-center gap-2 bg-gray-800/50 rounded-lg p-3"
-                >
-                  <FileText className="w-4 h-4 text-blue-400 shrink-0" />
-                  <p className="text-sm text-gray-200 font-mono truncate">
-                    {file}
-                  </p>
+            {data?.memorySearchResults.length === 0 ? (
+              <p className="text-gray-500 text-sm">
+                No memory search results. Memory indexing may be disabled or not
+                yet populated.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {data?.memorySearchResults.map((result, i) => (
+                  <div key={i} className="bg-gray-800/50 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-xs font-mono text-blue-400">
+                        {result.path}
+                        {result.startLine
+                          ? `:${result.startLine}-${result.endLine}`
+                          : ""}
+                      </p>
+                      {result.score && (
+                        <span className="text-xs text-gray-500">
+                          score: {result.score.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 whitespace-pre-wrap line-clamp-3">
+                      {result.snippet}
+                    </p>
+                    {result.source && (
+                      <span className="text-xs text-gray-600 mt-1 inline-block">
+                        source: {result.source}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* Tool Invocation Results (debug) */}
+        <Card
+          title="Tool Invocation Results"
+          icon={Terminal}
+          count={data?.toolResults.length}
+          defaultOpen={false}
+        >
+          <p className="text-xs text-gray-500 mb-3">
+            Raw results from each <code>POST /tools/invoke</code> call to the
+            gateway
+          </p>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {data?.toolResults.map((result, i) => (
+              <div
+                key={i}
+                className={`rounded-lg p-3 font-mono text-xs ${
+                  result.ok
+                    ? "bg-green-500/10 border border-green-500/20"
+                    : "bg-red-500/10 border border-red-500/20"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span
+                    className={
+                      result.ok ? "text-green-400" : "text-red-400"
+                    }
+                  >
+                    {result.ok ? "OK" : "FAIL"} — {result.tool}
+                  </span>
                 </div>
-              ))}
-            </div>
-          )}
+                {result.error && (
+                  <p className="text-red-300 text-xs mb-1">{result.error}</p>
+                )}
+                {result.ok && result.data != null && (
+                  <pre className="text-gray-400 overflow-auto max-h-32 whitespace-pre-wrap">
+                    {typeof result.data === "string"
+                      ? result.data.substring(0, 500)
+                      : JSON.stringify(result.data, null, 2).substring(0, 500)}
+                    {(typeof result.data === "string"
+                      ? result.data.length
+                      : JSON.stringify(result.data).length) > 500
+                      ? "\n..."
+                      : ""}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
         </Card>
       </div>
 
       {/* Footer */}
       <div className="mt-8 text-center text-xs text-gray-600">
-        OpenCLAW Mission Control &middot; Set{" "}
-        <code className="text-gray-500">OPENCLAW_GATEWAY_URL</code> and{" "}
-        <code className="text-gray-500">OPENCLAW_GATEWAY_TOKEN</code> in Vercel
-        env to connect
+        OpenCLAW Mission Control &middot; Using{" "}
+        <code className="text-gray-500">POST /tools/invoke</code> via OpenClaw
+        Gateway
       </div>
     </div>
   );
