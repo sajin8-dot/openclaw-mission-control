@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenCLAW Mission Control Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/openclaw-mission-control
+ExecStart=/usr/bin/node /opt/openclaw-mission-control/node_modules/.bin/next start -p 3000
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/opt/openclaw-mission-control/.env.local
+
+[Install]
+WantedBy=multi-user.target
