@@ -13,6 +13,7 @@ import {
   Loader2,
   Package,
   RefreshCw,
+  Search,
   XCircle,
 } from "lucide-react";
 
@@ -23,35 +24,21 @@ interface GatewayInfo {
   lastPing: string | null;
 }
 
-interface MemoryFile {
-  name: string;
+interface EndpointStatus {
   path: string;
-  size: number;
-  lastModified: string;
-  type: "file" | "directory";
-}
-
-interface Agent {
-  id: string;
-  name: string;
-  status: "active" | "idle" | "error";
-  lastActivity: string;
-  module: string;
-}
-
-interface Module {
-  name: string;
-  version: string;
-  status: "loaded" | "unloaded" | "error";
-  agentCount: number;
+  status: number | null;
+  ok: boolean;
+  error?: string;
 }
 
 interface DashboardData {
   gateway: GatewayInfo;
-  memoryFiles: MemoryFile[];
-  agents: Agent[];
-  modules: Module[];
+  memoryFiles: Record<string, unknown>[];
+  agents: Record<string, unknown>[];
+  modules: Record<string, unknown>[];
   keyFiles: string[];
+  endpoints: EndpointStatus[];
+  rawDiscovery?: Record<string, unknown>;
   error?: string;
 }
 
@@ -101,10 +88,19 @@ function Card({
   );
 }
 
+function getDisplayValue(obj: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    if (obj[key] !== undefined && obj[key] !== null) return String(obj[key]);
+  }
+  return JSON.stringify(obj);
+}
+
 export default function MissionControl() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showEndpoints, setShowEndpoints] = useState(false);
+  const [showRawData, setShowRawData] = useState(false);
 
   async function fetchData() {
     try {
@@ -123,6 +119,7 @@ export default function MissionControl() {
         agents: [],
         modules: [],
         keyFiles: [],
+        endpoints: [],
         error: "Failed to reach the API. Check your deployment.",
       });
     } finally {
@@ -147,6 +144,9 @@ export default function MissionControl() {
       </div>
     );
   }
+
+  const okEndpoints = data?.endpoints?.filter((e) => e.ok) || [];
+  const failedEndpoints = data?.endpoints?.filter((e) => !e.ok) || [];
 
   return (
     <div className="min-h-screen p-6 max-w-7xl mx-auto">
@@ -243,34 +243,111 @@ export default function MissionControl() {
         </div>
       </div>
 
+      {/* Endpoint Discovery */}
+      {data?.endpoints && data.endpoints.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
+          <button
+            onClick={() => setShowEndpoints(!showEndpoints)}
+            className="flex items-center gap-2 w-full text-left"
+          >
+            <Search className="w-5 h-5 text-blue-400" />
+            <h2 className="text-lg font-semibold text-gray-100">
+              API Endpoint Discovery
+            </h2>
+            <span className="ml-auto flex items-center gap-2 text-sm">
+              <span className="text-green-400">{okEndpoints.length} OK</span>
+              <span className="text-red-400">
+                {failedEndpoints.length} failed
+              </span>
+              <span className="text-gray-500">
+                {showEndpoints ? "▲" : "▼"}
+              </span>
+            </span>
+          </button>
+          {showEndpoints && (
+            <div className="mt-4 space-y-1 max-h-96 overflow-y-auto">
+              {data.endpoints.map((ep) => (
+                <div
+                  key={ep.path}
+                  className={`flex items-center justify-between px-3 py-2 rounded font-mono text-xs ${
+                    ep.ok
+                      ? "bg-green-500/10 text-green-300"
+                      : "bg-gray-800/50 text-gray-500"
+                  }`}
+                >
+                  <span>{ep.path}</span>
+                  <span>
+                    {ep.ok ? (
+                      <span className="text-green-400">{ep.status}</span>
+                    ) : (
+                      <span className="text-red-400">
+                        {ep.error || ep.status}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Raw Discovery Data */}
+      {data?.rawDiscovery &&
+        Object.keys(data.rawDiscovery).length > 0 && (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
+            <button
+              onClick={() => setShowRawData(!showRawData)}
+              className="flex items-center gap-2 w-full text-left"
+            >
+              <Database className="w-5 h-5 text-purple-400" />
+              <h2 className="text-lg font-semibold text-gray-100">
+                Raw Gateway Response Data
+              </h2>
+              <span className="ml-auto text-gray-500 text-sm">
+                {showRawData ? "▲" : "▼"}
+              </span>
+            </button>
+            {showRawData && (
+              <pre className="mt-4 bg-gray-950 rounded-lg p-4 text-xs text-gray-300 overflow-auto max-h-96 font-mono">
+                {JSON.stringify(data.rawDiscovery, null, 2)}
+              </pre>
+            )}
+          </div>
+        )}
+
       {/* Main Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Active Agents */}
         <Card title="Active Agents" icon={Bot} count={data?.agents.length}>
           {data?.agents.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              No agents found. Configure your gateway to see active agents.
+              No agents found. Check endpoint discovery above to verify correct
+              API paths.
             </p>
           ) : (
             <div className="space-y-3">
-              {data?.agents.map((agent) => (
+              {data?.agents.map((agent, i) => (
                 <div
-                  key={agent.id}
+                  key={String(agent.id || i)}
                   className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3"
                 >
                   <div>
                     <p className="text-sm font-medium text-gray-200">
-                      {agent.name}
+                      {getDisplayValue(agent, ["name", "id", "agent_name"])}
                     </p>
                     <p className="text-xs text-gray-500">
-                      Module: {agent.module}
+                      {getDisplayValue(agent, [
+                        "module",
+                        "type",
+                        "agent_type",
+                      ])}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-xs text-gray-500">
-                      {new Date(agent.lastActivity).toLocaleTimeString()}
-                    </span>
-                    <StatusBadge status={agent.status} />
+                    {agent.status != null && (
+                      <StatusBadge status={String(agent.status)} />
+                    )}
                   </div>
                 </div>
               ))}
@@ -282,26 +359,28 @@ export default function MissionControl() {
         <Card title="Modules" icon={Package} count={data?.modules.length}>
           {data?.modules.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              No modules loaded. Connect to the gateway to view modules.
+              No modules loaded. Check endpoint discovery above to verify
+              correct API paths.
             </p>
           ) : (
             <div className="space-y-3">
-              {data?.modules.map((mod) => (
+              {data?.modules.map((mod, i) => (
                 <div
-                  key={mod.name}
+                  key={String(mod.name || i)}
                   className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3"
                 >
                   <div>
                     <p className="text-sm font-medium text-gray-200">
-                      {mod.name}
+                      {getDisplayValue(mod, ["name", "module_name"])}
                     </p>
-                    <p className="text-xs text-gray-500">v{mod.version}</p>
+                    <p className="text-xs text-gray-500">
+                      {getDisplayValue(mod, ["version", "ver"])}
+                    </p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-xs text-gray-500">
-                      {mod.agentCount} agent{mod.agentCount !== 1 ? "s" : ""}
-                    </span>
-                    <StatusBadge status={mod.status} />
+                    {mod.status != null && (
+                      <StatusBadge status={String(mod.status)} />
+                    )}
                   </div>
                 </div>
               ))}
@@ -317,30 +396,36 @@ export default function MissionControl() {
         >
           {data?.memoryFiles.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              No memory files found. Connect to the gateway to browse agent
-              memory.
+              No memory files found. Check endpoint discovery above to verify
+              correct API paths.
             </p>
           ) : (
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {data?.memoryFiles.map((file) => (
+              {data?.memoryFiles.map((file, i) => (
                 <div
-                  key={file.path}
+                  key={String(file.path || file.name || i)}
                   className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <FileText className="w-4 h-4 text-gray-400 shrink-0" />
                     <div className="min-w-0">
                       <p className="text-sm text-gray-200 truncate">
-                        {file.name}
+                        {getDisplayValue(file, [
+                          "name",
+                          "filename",
+                          "file_name",
+                        ])}
                       </p>
                       <p className="text-xs text-gray-500 truncate">
-                        {file.path}
+                        {getDisplayValue(file, ["path", "file_path", "key"])}
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs text-gray-500 shrink-0 ml-2">
-                    {(file.size / 1024).toFixed(1)}KB
-                  </span>
+                  {file.size !== undefined && (
+                    <span className="text-xs text-gray-500 shrink-0 ml-2">
+                      {(Number(file.size) / 1024).toFixed(1)}KB
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -355,8 +440,8 @@ export default function MissionControl() {
         >
           {data?.keyFiles.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              No key files tracked. The gateway will report actively used files
-              here.
+              No key files tracked. Check endpoint discovery above to verify
+              correct API paths.
             </p>
           ) : (
             <div className="space-y-2 max-h-80 overflow-y-auto">
