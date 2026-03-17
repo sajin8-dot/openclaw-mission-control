@@ -37,8 +37,17 @@ interface MemorySearchResult {
   source: "memory" | "sessions";
 }
 
+interface SystemInfo {
+  version?: string;
+  uptime?: number;
+  pid?: number;
+  memory?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface MemoryDashboardData {
   gateway: GatewayInfo;
+  systemInfo: SystemInfo | null;
   workspaceFiles: WorkspaceFile[];
   sessions: SessionInfo[];
   memorySearchResults: MemorySearchResult[];
@@ -121,6 +130,7 @@ export async function GET() {
   if (!gatewayUrl || !gatewayToken) {
     return NextResponse.json({
       gateway: gatewayInfo,
+      systemInfo: null,
       workspaceFiles: [],
       sessions: [],
       memorySearchResults: [],
@@ -128,6 +138,35 @@ export async function GET() {
       error:
         "Gateway not configured. Set OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_TOKEN in your Vercel environment variables.",
     } satisfies MemoryDashboardData);
+  }
+
+  // First, check gateway health via GET /api/system and /healthz
+  let systemInfo: SystemInfo | null = null;
+  try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${gatewayToken}`,
+    };
+    const [systemRes, healthRes] = await Promise.all([
+      fetch(`${gatewayUrl}/api/system`, { headers, cache: "no-store" }).catch(() => null),
+      fetch(`${gatewayUrl}/healthz`, { headers, cache: "no-store" }).catch(() => null),
+    ]);
+
+    if (systemRes?.ok) {
+      const text = await systemRes.text();
+      try {
+        systemInfo = JSON.parse(text);
+        gatewayInfo.connected = true;
+        gatewayInfo.lastPing = new Date().toISOString();
+      } catch {
+        // Response wasn't JSON
+      }
+    }
+    if (!gatewayInfo.connected && healthRes?.ok) {
+      gatewayInfo.connected = true;
+      gatewayInfo.lastPing = new Date().toISOString();
+    }
+  } catch {
+    // Gateway not reachable via health endpoints
   }
 
   // Fetch workspace files via memory_get, sessions via sessions_list,
@@ -146,12 +185,14 @@ export async function GET() {
     ]);
 
   const allResults = [sessionsResult, memorySearchResult, ...fileResults];
-  const anyReachable = allResults.some(
+  const anyToolReachable = allResults.some(
     (r) => r.ok || (r.error && !r.error.includes("Network error") && !r.error.includes("fetch failed"))
   );
 
-  gatewayInfo.connected = anyReachable;
-  gatewayInfo.lastPing = anyReachable ? new Date().toISOString() : null;
+  if (anyToolReachable) {
+    gatewayInfo.connected = true;
+    gatewayInfo.lastPing = new Date().toISOString();
+  }
 
   // Parse workspace files
   const workspaceFiles: WorkspaceFile[] = fileResults.map((result, i) => {
@@ -211,11 +252,12 @@ export async function GET() {
 
   return NextResponse.json({
     gateway: gatewayInfo,
+    systemInfo,
     workspaceFiles,
     sessions,
     memorySearchResults,
     toolResults: allResults,
-    ...(!anyReachable
+    ...(!gatewayInfo.connected
       ? {
           error:
             "Cannot reach gateway. Verify OPENCLAW_GATEWAY_URL is correct and the gateway is running.",

@@ -56,8 +56,16 @@ interface MemorySearchResult {
   source: "memory" | "sessions";
 }
 
+interface SystemInfo {
+  version?: string;
+  uptime?: number;
+  pid?: number;
+  [key: string]: unknown;
+}
+
 interface DashboardData {
   gateway: GatewayInfo;
+  systemInfo: SystemInfo | null;
   workspaceFiles: WorkspaceFile[];
   sessions: SessionInfo[];
   memorySearchResults: MemorySearchResult[];
@@ -154,6 +162,7 @@ export default function MissionControl() {
           tokenConfigured: false,
           lastPing: null,
         },
+        systemInfo: null,
         workspaceFiles: [],
         sessions: [],
         memorySearchResults: [],
@@ -279,6 +288,41 @@ export default function MissionControl() {
             </p>
           </div>
         </div>
+        {data?.systemInfo && (
+          <div className="mt-4 pt-4 border-t border-gray-800 grid grid-cols-2 md:grid-cols-4 gap-4">
+            {data.systemInfo.version && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                  Version
+                </p>
+                <p className="text-sm text-gray-300 font-mono">
+                  {data.systemInfo.version}
+                </p>
+              </div>
+            )}
+            {data.systemInfo.uptime != null && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                  Uptime
+                </p>
+                <p className="text-sm text-gray-300">
+                  {Math.floor(Number(data.systemInfo.uptime) / 3600)}h{" "}
+                  {Math.floor((Number(data.systemInfo.uptime) % 3600) / 60)}m
+                </p>
+              </div>
+            )}
+            {data.systemInfo.pid != null && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                  PID
+                </p>
+                <p className="text-sm text-gray-300 font-mono">
+                  {data.systemInfo.pid}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Main Content */}
